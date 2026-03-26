@@ -1,0 +1,9 @@
+NAME                      IMAGE                 COMMAND                  SERVICE           CREATED          STATUS                    PORTS
+midterm_cassandra_node1   cassandra:4.1         "docker-entrypoint.s…"   cassandra-node1   20 minutes ago   Up 20 minutes (healthy)   0.0.0.0:9042->9042/tcp, [::]:9042->9042/tcp
+midterm_cassandra_node2   cassandra:4.1         "docker-entrypoint.s…"   cassandra-node2   20 minutes ago   Up 19 minutes (healthy)   0.0.0.0:9043->9042/tcp, [::]:9043->9042/tcp
+midterm_etl               part03-etl-service    "./entrypoint.sh"        etl-service       20 minutes ago   Up 18 minutes             
+midterm_hr_db             postgres:16           "docker-entrypoint.s…"   hr-db             20 minutes ago   Up 20 minutes (healthy)   0.0.0.0:5502->5432/tcp, [::]:5502->5432/tcp
+midterm_pgadmin           dpage/pgadmin4:8.13   "/entrypoint.sh"         pgadmin           20 minutes ago   Up 20 minutes             0.0.0.0:8200->80/tcp, [::]:8200->80/tcp
+midterm_sales_shard_ne    postgres:16           "docker-entrypoint.s…"   sales-shard-ne    20 minutes ago   Up 20 minutes (healthy)   0.0.0.0:5512->5432/tcp, [::]:5512->5432/tcp
+midterm_sales_shard_se    postgres:16           "docker-entrypoint.s…"   sales-shard-se    20 minutes ago   Up 20 minutes (healthy)   0.0.0.0:5511->5432/tcp, [::]:5511->5432/tcp
+midterm_warehouse_db      postgres:16           "docker-entrypoint.s…"   warehouse-db      20 minutes ago   Up 20 minutes (healthy)   0.0.0.0:5503->5432/tcp, [::]:5503->5432/tcp
