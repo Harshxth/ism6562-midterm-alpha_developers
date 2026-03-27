@@ -1,0 +1,86 @@
+3.2 Task 1.2: Explore the Cassandra Cluster (1 pt)
+bash-3.2$ docker compose exec cassandra-node1 nodetool status
+Datacenter: datacenter1
+=======================
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+--  Address     Load        Tokens  Owns (effective)  Host ID                               Rack 
+UN  172.20.0.8  100.32 KiB  16      100.0%            db4bf131-ef98-4fc9-8674-1be7bde2baa3  rack1
+UN  172.20.0.5  98.81 KiB   16      100.0%            2bef7c93-4086-4ffa-b8ab-24f046c419e3  rack1
+
+
+bash-3.2$ docker compose exec cassandra-node1 cqlsh
+Connected to TechRetailCluster at 127.0.0.1:9042
+[cqlsh 6.1.0 | Cassandra 4.1.10 | CQL spec 3.4.6 | Native protocol v5]
+Use HELP for help.
+
+
+cqlsh> DESCRIBE KEYSPACES;
+system       system_distributed  system_traces  system_virtual_schema
+system_auth  system_schema       system_views   techretail_orders    
+cqlsh> USE techretail_orders;
+cqlsh:techretail_orders> DESCRIBE TABLES;
+orders_by_customer  orders_by_product
+cqlsh:techretail_orders> DESCRIBE TABLE orders_by_customer;
+CREATE TABLE techretail_orders.orders_by_customer (
+    customer_id int,
+    order_date date,
+    order_id int,
+    customer_name text,
+    customer_state text,
+    product_category text,
+    product_id int,
+    product_name text,
+    quantity int,
+    total_price decimal,
+    unit_price decimal,
+    PRIMARY KEY (customer_id, order_date, order_id)
+) WITH CLUSTERING ORDER BY (order_date DESC, order_id DESC)
+    AND additional_write_policy = '99p'
+    AND bloom_filter_fp_chance = 0.01
+    AND caching = {'keys': 'ALL', 'rows_per_partition': 'NONE'}
+    AND cdc = false
+    AND comment = ''
+    AND compaction = {'class': 'org.apache.cassandra.db.compaction.SizeTieredCompactionStrategy', 'max_threshold': '32', 'min_threshold': '4'}
+    AND compression = {'chunk_length_in_kb': '16', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}
+    AND memtable = 'default'
+    AND crc_check_chance = 1.0
+    AND default_time_to_live = 0
+    AND extensions = {}
+    AND gc_grace_seconds = 864000
+    AND max_index_interval = 2048
+    AND memtable_flush_period_in_ms = 0
+    AND min_index_interval = 128
+    AND read_repair = 'BLOCKING'
+    AND speculative_retry = '99p';
+cqlsh:techretail_orders> DESCRIBE TABLE orders_by_product;
+CREATE TABLE techretail_orders.orders_by_product (
+    product_id int,
+    order_date date,
+    order_id int,
+    customer_id int,
+    customer_name text,
+    quantity int,
+    total_price decimal,
+    PRIMARY KEY (product_id, order_date, order_id)
+) WITH CLUSTERING ORDER BY (order_date DESC, order_id DESC)
+    AND additional_write_policy = '99p'
+    AND bloom_filter_fp_chance = 0.01
+    AND caching = {'keys': 'ALL', 'rows_per_partition': 'NONE'}
+    AND cdc = false
+    AND comment = ''
+    AND compaction = {'class': 'org.apache.cassandra.db.compaction.SizeTieredCompactionStrategy', 'max_threshold': '32', 'min_threshold': '4'}
+    AND compression = {'chunk_length_in_kb': '16', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}
+    AND memtable = 'default'
+    AND crc_check_chance = 1.0
+    AND default_time_to_live = 0
+    AND extensions = {}
+    AND gc_grace_seconds = 864000
+    AND max_index_interval = 2048
+    AND memtable_flush_period_in_ms = 0
+    AND min_index_interval = 128
+    AND read_repair = 'BLOCKING'
+    AND speculative_retry = '99p';
+cqlsh:techretail_orders> EXIT;
+
+

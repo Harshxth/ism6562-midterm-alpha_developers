@@ -1,0 +1,8 @@
+7.2 Task 5.2: Argue For or Against Cassandra as a Warehouse (2 pts)
+
+Cassandra is a fundamentally poor choice for a data warehouse role. While it excels at high speed ingestion, it lacks the relational capabilities required for complex analytical reporting. Specifically, a star schema depends on the ability to JOIN fact and dimension tables. Cassandra does not support JOINs, which would force engineers to denormalize every possible analytical combination into separate, rigid tables. This is entirely impractical for a warehouse environment where data relationships are central to the architecture.
+
+Furthermore, analytical workloads rely heavily on GROUP BY and aggregate functions like SUM or AVG. In Cassandra, these operations are often inefficient and require ALLOW FILTERING when not targeting specific partition keys, leading to unpredictable performance at scale. Business intelligence also demands strong consistency to ensure that reports are accurate and reproducible. Cassandra’s eventual consistency model can lead to discrepancies in reported figures if data has not fully propagated across nodes at the time a report is run.
+
+Finally, the query-first design of Cassandra is inherently incompatible with the ad-hoc nature of data analysis. Analysts and data scientists often need to explore data with unpredictable queries to discover new trends. Cassandra requires the query to be known at the time of table design, making it impossible to handle the flexible, exploratory questions that a PostgreSQL warehouse handles with ease. Therefore, while Cassandra is perfect for the speed layer, it cannot replace the relational warehouse for decision support.
+

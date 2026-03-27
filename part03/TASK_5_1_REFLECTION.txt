@@ -1,0 +1,17 @@
+Task 5.1: Database Comparison Table
+
+Aspect          | PG Shards         | Cassandra         | PG Warehouse
+----------------|-------------------|-------------------|------------------
+Primary role    | Ref. Data         | Order Ingestion   | Data Warehouse
+CAP positioning | CA                | AP                | CP
+Consistency     | Strong (ACID)     | Eventual          | Strong Analytical
+Best for        | JOINs/Relations   | Write Scale       | BI and OLAP
+Limitation      | Scaling           | No JOINs          | Slow Writes
+
+Written Response: The Necessity of Polyglot Persistence
+The current architecture leverages the unique strengths of three different database roles to handle a modern retail workload. PostgreSQL shards function as the operational backbone for structured reference data. Because records like customer profiles and product catalogs require strong ACID compliance and relational integrity, PostgreSQL is the ideal choice for managing these dimensions. However, as transactional volume grows, a single relational instance struggles with the performance requirements of high-velocity write operations.
+
+Cassandra addresses this by acting as the ingestion speed layer. It excels at high-velocity writes and horizontal scaling across multiple nodes. By sacrificing the ability to perform complex joins and adopting a query-first design, Cassandra ensures that the order intake process never becomes a bottleneck. It provides high availability even if a node fails. This is a trade-off that a traditional relational database cannot make without introducing significant latency or complexity.
+
+Finally, the PostgreSQL warehouse serves as the analytical layer. While Cassandra is excellent for writing data, it is poorly suited for querying across multiple dimensions for reporting. The warehouse reorganizes the data into a star schema where complex joins and aggregations can occur efficiently. A single technology cannot handle all three roles because of the fundamental trade-offs described by the CAP theorem. It is impossible to maximize consistency, availability, and partition tolerance simultaneously. By using polyglot persistence, each tool is used for its specialized purpose: PostgreSQL for relational reliability, Cassandra for scalable ingestion, and the warehouse for deep business insights.
+
