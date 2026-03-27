@@ -1,0 +1,408 @@
+6.2 Task 4.2: Modify the ETL to Extract from Cassandra (2 pts)
+Modified script:
+
+#!/usr/bin/env python3
+"""
+ETL Pipeline: Operational Databases -> Data Warehouse
+ISM 6562 - Midterm Part 3
+    
+This script extracts data from operational databases and loads it into a
+data warehouse using a star schema.
+This is the Part 2 ETL script (multi-shard extraction working). In Part 3,
+you need to modify it to extract ORDERS from Cassandra instead of from the
+PostgreSQL shards. Customers and products still come from the PostgreSQL
+shards (reference data).
+Phases:
+  1. EXTRACT  - Read customers/products from PostgreSQL shards,
+                orders from PostgreSQL shards (you will change this to Cassandra),
+                employees from hr-db
+  2. TRANSFORM - Generate dim_date; denormalize employee + department
+  3. LOAD      - Upsert dimensions and insert facts (idempotent)
+"""
+        
+import os
+import sys
+from datetime import date, timedelta
+    
+import psycopg2
+from psycopg2.extras import execute_values
+from cassandra.cluster import Cluster
+# ---------------------------------------------------------------------------
+# Database connection helpers
+# ---------------------------------------------------------------------------
+    
+def get_connection(prefix):   
+    """Create a database connection using environment variables."""   
+    return psycopg2.connect(
+        host=os.environ[f"{prefix}_DB_HOST"],
+        port=os.environ[f"{prefix}_DB_PORT"],
+        dbname=os.environ[f"{prefix}_DB_NAME"],
+        user=os.environ[f"{prefix}_DB_USER"],
+        password=os.environ[f"{prefix}_DB_PASSWORD"],
+    )
+        
+    
+# ---------------------------------------------------------------------------
+# EXTRACT phase
+# ---------------------------------------------------------------------------
+    
+def extract_sales_from_shard(conn, shard_name):
+    """Extract customers, products, and orders from a single sales shard."""
+    cur = conn.cursor()
+    cur.execute("SELECT customer_id, first_name, last_name, email, city, state FROM customers;")
+    customers = cur.fetchall()
+    print(f"  Extracted {len(customers)} customers from {shard_name}")
+    
+    cur.execute("SELECT product_id, product_name, category, unit_price FROM products;")
+    products = cur.fetchall()
+print(f"  Extracted {len(products)} products from {shard_name}")
+        
+    cur.execute("""
+        SELECT order_id, customer_id, product_id, quantity, total_price, order_date
+        FROM orders;
+    """)
+    orders = cur.fetchall()
+    print(f"  Extracted {len(orders)} orders from {shard_name}")
+    cur.close()
+    return customers, products, orders
+    
+    
+def extract_hr(conn):
+    """Extract employees joined with departments from the HR database."""
+    cur = conn.cursor()
+    
+    cur.execute("""
+        SELECT e.employee_id, e.first_name, e.last_name, e.email,
+               e.job_title, d.department_name, d.location
+FROM employees e
+        JOIN departments d ON e.department_id = d.department_id;
+    """)
+    employees = cur.fetchall()
+    print(f"  Extracted {len(employees)} employees from hr-db")
+    
+    cur.close()
+    return employees
+    
+def extract_orders_from_cassandra():  
+    """Extract orders from Cassandra's orders_by_customer table."""
+    hosts = os.environ["CASSANDRA_HOSTS"].split(",")
+    keyspace = os.environ["CASSANDRA_KEYSPACE"]
+    cluster = Cluster(hosts)
+    session = cluster.connect(keyspace)
+    
+    rows = session.execute("SELECT order_id, customer_id, product_id, quantity, total_price, order_date FROM orders_by_customer")
+        
+    seen = set()
+orders = []
+    for row in rows:
+        if row.order_id not in seen:
+            seen.add(row.order_id)
+            orders.append((row.order_id, row.customer_id, row.product_id,
+                          row.quantity, float(row.total_price), row.order_date.date()))
+    
+    print(f"  Extracted {len(orders)} orders from Cassandra")
+    cluster.shutdown()
+    return orders
+    
+    
+# ---------------------------------------------------------------------------
+# TRANSFORM phase
+# ---------------------------------------------------------------------------
+    
+def generate_dim_date_rows(year):
+    """Generate one row per day for the given year."""
+    rows = []   
+day_names = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                 "Friday", "Saturday", "Sunday"]
+    month_names = ["January", "February", "March", "April", "May", "June",
+                   "July", "August", "September", "October", "November", "December"]
+            
+    current = date(year, 1, 1)
+    end = date(year, 12, 31)
+    
+    while current <= end:
+        date_key = int(current.strftime("%Y%m%d"))
+        rows.append((
+            date_key,
+            current,
+            current.year,
+            (current.month - 1) // 3 + 1,  # quarter
+            current.month,
+            month_names[current.month - 1],
+            current.day,
+            current.weekday(),              # 0=Monday
+            day_names[current.weekday()],
+current.weekday() >= 5,         # is_weekend
+        ))
+        current += timedelta(days=1)
+                   
+    print(f"  Generated {len(rows)} dim_date rows for {year}")
+    return rows
+    
+    
+# ---------------------------------------------------------------------------
+# LOAD phase
+# ---------------------------------------------------------------------------
+            
+def load_dim_date(cur, rows):
+    """Load date dimension (insert, skip conflicts)."""
+    execute_values(cur, """
+        INSERT INTO dim_date (date_key, full_date, year, quarter, month,
+                              month_name, day_of_month, day_of_week, day_name, is_weekend)
+        VALUES %s
+        ON CONFLICT (date_key) DO NOTHING;
+    """, rows)
+print(f"  Loaded dim_date ({len(rows)} rows, conflicts skipped)")
+          
+        
+def load_dim_customer(cur, customers):
+    """Load customer dimension (upsert on source_customer_id)."""
+    rows = [(c[0], c[1], c[2], c[3], c[4], c[5]) for c in customers]
+    execute_values(cur, """
+        INSERT INTO dim_customer (source_customer_id, first_name, last_name, email, city, state)
+        VALUES %s
+        ON CONFLICT (source_customer_id) DO UPDATE SET
+            first_name = EXCLUDED.first_name,
+            last_name  = EXCLUDED.last_name,
+            email      = EXCLUDED.email,
+            city       = EXCLUDED.city,
+            state      = EXCLUDED.state;
+    """, rows)
+    print(f"  Loaded dim_customer ({len(rows)} rows, upserted)")
+        
+        
+def load_dim_product(cur, products):
+"""Load product dimension (upsert on source_product_id)."""
+    rows = [(p[0], p[1], p[2], p[3]) for p in products]
+    execute_values(cur, """
+        INSERT INTO dim_product (source_product_id, product_name, category, unit_price)
+        VALUES %s
+        ON CONFLICT (source_product_id) DO UPDATE SET
+            product_name = EXCLUDED.product_name,
+            category     = EXCLUDED.category,
+            unit_price   = EXCLUDED.unit_price;
+    """, rows)
+    print(f"  Loaded dim_product ({len(rows)} rows, upserted)")
+            
+            
+def load_dim_employee(cur, employees): 
+    """Load employee dimension with denormalized department info."""
+    rows = [(e[0], e[1], e[2], e[3], e[4], e[5], e[6]) for e in employees]
+    execute_values(cur, """
+        INSERT INTO dim_employee (source_employee_id, first_name, last_name,
+                                  email, job_title, department_name, department_location)
+        VALUES %s
+ ON CONFLICT (source_employee_id) DO UPDATE SET
+            first_name          = EXCLUDED.first_name, 
+            last_name           = EXCLUDED.last_name,
+            email               = EXCLUDED.email,
+            job_title           = EXCLUDED.job_title,
+            department_name     = EXCLUDED.department_name,
+            department_location = EXCLUDED.department_location;
+    """, rows)
+    print(f"  Loaded dim_employee ({len(rows)} rows, upserted)")
+    
+    
+def load_fact_sales(cur, orders):
+    """Load fact_sales by looking up surrogate keys from dimensions."""
+    inserted = 0
+    skipped = 0
+    
+    for order in orders:   
+        order_id, customer_id, product_id, quantity, total_price, order_date = order
+        date_key = int(order_date.strftime("%Y%m%d"))
+ # Look up surrogate keys
+        cur.execute("SELECT customer_key FROM dim_customer WHERE source_customer_id = %s;",
+                    (customer_id,))
+        cust_row = cur.fetchone()
+            
+        cur.execute("SELECT product_key FROM dim_product WHERE source_product_id = %s;",
+                    (product_id,))
+        prod_row = cur.fetchone()
+    
+        cur.execute("SELECT unit_price FROM dim_product WHERE source_product_id = %s;",
+                    (product_id,))
+        price_row = cur.fetchone()
+    
+        if cust_row and prod_row and price_row:
+            cur.execute("""
+                INSERT INTO fact_sales (date_key, customer_key, product_key,
+                                        source_order_id, quantity, unit_price, total_price)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (source_order_id) DO NOTHING;
+            """, (date_key, cust_row[0], prod_row[0],
+             order_id, quantity, price_row[0], total_price))
+            if cur.rowcount > 0:
+                inserted += 1
+            else:
+                skipped += 1
+        else:
+            print(f"  WARNING: Could not find dimension keys for order {order_id}")
+        
+    print(f"  Loaded fact_sales ({inserted} inserted, {skipped} already existed)")
+        
+                    
+# ---------------------------------------------------------------------------
+# Main ETL orchestrator
+# ---------------------------------------------------------------------------
+            
+def run_etl():
+    """Execute the full ETL pipeline."""
+    print("=" * 60)
+    print("ETL Pipeline Starting")
+    print("=" * 60)
+                
+    # --- EXTRACT ---
+    print("\n[EXTRACT] Reading from operational databases...")
+            
+    # Extract from SE shard 
+    se_conn = get_connection("SALES_SHARD_SE")
+    se_customers, se_products, _  = extract_sales_from_shard(se_conn, "sales-shard-se")
+    se_conn.close()
+    
+    # Extract from NE shard
+    ne_conn = get_connection("SALES_SHARD_NE")
+    ne_customers, ne_products, _  = extract_sales_from_shard(ne_conn, "sales-shard-ne")
+    ne_conn.close()
+    # Merge shard results
+    customers = se_customers + ne_customers
+    products = se_products  # Products are identical on both shards (reference table)
+    orders = extract_orders_from_cassandra()
+    print(f"  Merged: {len(customers)} customers, {len(products)} products, {len(orders)} orders")
+    
+    hr_conn = get_connection("HR")
+    employees = extract_hr(hr_conn)
+    hr_conn.close()
+            
+    # --- TRANSFORM ---
+    print("\n[TRANSFORM] Preparing dimension data...")
+    dim_date_rows = generate_dim_date_rows(2026)
+    print("  Employee dimension: denormalized with department info (done in extract query)")
+    
+    # --- LOAD ---
+    print("\n[LOAD] Writing to data warehouse...")
+    wh_conn = get_connection("WAREHOUSE")
+    cur = wh_conn.cursor()
+    load_dim_date(cur, dim_date_rows)
+    load_dim_customer(cur, customers)
+    load_dim_product(cur, products)
+    load_dim_employee(cur, employees)
+    load_fact_sales(cur, orders)
+    wh_conn.commit()
+    cur.close()
+    wh_conn.close()
+            
+    print("\n" + "=" * 60)
+    print("ETL Pipeline Complete")
+    print("=" * 60)
+    
+    
+if __name__ == "__main__":
+    try:
+        run_etl()
+    except Exception as e:
+        print(f"ETL FAILED: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+After modifying the script, rebuild and restart the ETL service:
+bash-3.2$ nano etl/etl_script.py
+bash-3.2$ docker compose build etl-service
+[+] Building 2.3s (16/16) FINISHED                                                                                                                                                 
+ => [internal] load local bake definitions                                                                                                                                    0.0s
+ => => reading from stdin 622B                                                                                                                                                0.0s
+ => [internal] load build definition from Dockerfile                                                                                                                          0.0s
+ => => transferring dockerfile: 427B                                                                                                                                          0.0s
+ => [internal] load metadata for docker.io/library/python:3.11-slim                                                                                                           0.7s
+ => [auth] library/python:pull token for registry-1.docker.io                                                                                                                 0.0s
+ => [internal] load .dockerignore                                                                                                                                             0.0s
+ => => transferring context: 2B                                                                                                                                               0.0s
+ => [1/8] FROM docker.io/library/python:3.11-slim@sha256:9358444059ed78e2975ada2c189f1c1a3144a5dab6f35bff8c981afb38946634                                                     0.0s
+ => => resolve docker.io/library/python:3.11-slim@sha256:9358444059ed78e2975ada2c189f1c1a3144a5dab6f35bff8c981afb38946634                                                     0.0s
+ => [internal] load build context                                                                                                                                             0.0s
+ => => transferring context: 11.42kB                                                                                                                                          0.0s
+ => CACHED [2/8] RUN apt-get update && apt-get install -y cron && rm -rf /var/lib/apt/lists/*                                                                                 0.0s
+ => CACHED [3/8] RUN pip install --no-cache-dir psycopg2-binary cassandra-driver                                                                                              0.0s
+ => CACHED [4/8] WORKDIR /app                                                                                                                                                 0.0s
+ => [5/8] COPY etl_script.py .                                                                                                                                                0.0s
+ => [6/8] COPY crontab /etc/cron.d/etl-cron                                                                                                                                   0.0s
+ => [7/8] COPY entrypoint.sh .                                                                                                                                                0.0s
+ => [8/8] RUN chmod 0644 /etc/cron.d/etl-cron &&     crontab /etc/cron.d/etl-cron &&     chmod +x entrypoint.sh                                                               0.2s
+ => exporting to image                                                                                                                                                        0.1s
+ => => exporting layers                                                                                                                                                       0.1s
+ => => exporting manifest sha256:ba3470e59cd302883b2244d9fb77452630861c00fdc4fb8e710cde6c8e97abfc                                                                             0.0s
+ => => exporting config sha256:4607bdc125e7b85768530863ddc8670d579e256986e6e95d3d7d8a7d3146751b                                                                               0.0s
+ => => exporting attestation manifest sha256:65620de4769ced7c28a28657afc7df77e1c4e1ee73b90be0df27d3bddb8511fa                                                                 0.0s
+ => => exporting manifest list sha256:d4ec1b8b0665a5a451604f17fb077959b60fbe818d3615e5b21337b9ae1ab9c7                                                                        0.0s
+ => => naming to docker.io/library/part03-etl-service:latest                                                                                                                  0.0s
+ => => unpacking to docker.io/library/part03-etl-service:latest                                                                                                               0.0s
+ => resolving provenance for metadata file                                                                                                                                    0.0s
+[+] build 1/1
+ ✔ Image part03-etl-service Built                                                                                                                                              2.3s
+bash-3.2$ docker compose up -d etl-service
+[+] up 7/7
+ ✔ Container midterm_sales_shard_se  Healthy                                                                                                                                   2.5s
+ ✔ Container midterm_sales_shard_ne  Healthy                                                                                                                                   2.5s
+ ✔ Container midterm_cassandra_node1 Healthy                                                                                                                                   2.5s
+ ✔ Container midterm_cassandra_node2 Healthy                                                                                                                                   2.5s
+ ✔ Container midterm_hr_db           Healthy                                                                                                                                   2.5s
+ ✔ Container midterm_warehouse_db    Healthy                                                                                                                                   2.5s
+ ✔ Container midterm_etl             Recreated                                                                                                                                 1.4s
+bash-3.2$ docker compose logs -f etl-service
+midterm_etl  | === ETL Service Starting ===
+midterm_etl  | Seeding Cassandra...
+midterm_etl  | Seeding Cassandra schema and data...
+midterm_etl  | Waiting for Cassandra at ['cassandra-node1', 'cassandra-node2']...
+midterm_etl  | Cassandra is ready.
+midterm_etl  | Cassandra already seeded (28 orders found). Skipping.
+midterm_etl  | 
+midterm_etl  | Running initial ETL load...
+midterm_etl  | ============================================================
+midterm_etl  | ETL Pipeline Starting
+midterm_etl  | ============================================================
+midterm_etl  | 
+midterm_etl  | [EXTRACT] Reading from operational databases...
+midterm_etl  |   Extracted 7 customers from sales-shard-se
+midterm_etl  |   Extracted 10 products from sales-shard-se
+midterm_etl  |   Extracted 24 orders from sales-shard-se
+midterm_etl  |   Extracted 1 customers from sales-shard-ne
+midterm_etl  |   Extracted 10 products from sales-shard-ne
+midterm_etl  |   Extracted 3 orders from sales-shard-ne
+midterm_etl  |   Extracted 28 orders from Cassandra
+midterm_etl  |   Merged: 8 customers, 10 products, 28 orders
+midterm_etl  |   Extracted 12 employees from hr-db
+midterm_etl  | 
+midterm_etl  | [TRANSFORM] Preparing dimension data...
+midterm_etl  |   Generated 365 dim_date rows for 2026
+midterm_etl  |   Employee dimension: denormalized with department info (done in extract query)
+midterm_etl  | 
+midterm_etl  | [LOAD] Writing to data warehouse...
+midterm_etl  |   Loaded dim_date (365 rows, conflicts skipped)
+midterm_etl  |   Loaded dim_customer (8 rows, upserted)
+midterm_etl  |   Loaded dim_product (10 rows, upserted)
+midterm_etl  |   Loaded dim_employee (12 rows, upserted)
+midterm_etl  |   Loaded fact_sales (1 inserted, 27 already existed)
+midterm_etl  | 
+midterm_etl  | ============================================================
+midterm_etl  | ETL Pipeline Complete
+midterm_etl  | ============================================================
+midterm_etl  | 
+midterm_etl  | Starting cron for scheduled runs (every 5 minutes)...
+
+Verify the new Cassandra order (order 28, Bob Smith, Laptop Pro 15) appears in the warehouse:
+bash-3.2$ docker compose exec warehouse-db psql -U student -d warehouse -c "
+> SELECT f.source_order_id, d.full_date, c.first_name, c.last_name, 
+>        p.product_name, f.quantity, f.total_price
+> FROM fact_sales f
+> JOIN dim_date d ON f.date_key = d.date_key
+> JOIN dim_customer c ON f.customer_key = c.customer_key
+> JOIN dim_product p ON f.product_key = p.product_key
+> ORDER BY f.source_order_id DESC
+> LIMIT 3;"
+ source_order_id | full_date  | first_name | last_name |     product_name     | quantity | total_price 
+-----------------+------------+------------+-----------+----------------------+----------+-------------
+              28 | 2026-02-25 | Bob        | Smith     | Laptop Pro 15        |        1 |     1299.99
+              27 | 2026-02-22 | Grace      | Wilson    | Monitor 27-inch      |        1 |      349.99
+              26 | 2026-02-20 | Carol      | Williams  | Noise-Cancel Headset |        1 |      199.99
+(3 rows)
+
