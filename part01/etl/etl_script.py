@@ -19,7 +19,6 @@ from datetime import date, timedelta
 import psycopg2
 from psycopg2.extras import execute_values
 
-
 # ---------------------------------------------------------------------------
 # Database connection helpers
 # ---------------------------------------------------------------------------
@@ -33,7 +32,6 @@ def get_connection(prefix):
         user=os.environ[f"{prefix}_DB_USER"],
         password=os.environ[f"{prefix}_DB_PASSWORD"],
     )
-
 
 # ---------------------------------------------------------------------------
 # EXTRACT phase
