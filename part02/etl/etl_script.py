@@ -233,10 +233,23 @@ def run_etl():
 
     # --- EXTRACT ---
     print("\n[EXTRACT] Reading from operational databases...")
-    sales_conn = get_connection("SALES")
-    customers, products, orders = extract_sales(sales_conn)
-    sales_conn.close()
+    sales_se_conn = get_connection("SALES_SHARD_SE")
+    sales_ne_conn = get_connection("SALES_SHARD_NE")
 
+    # Southeast shard - extract customers, products, orders
+    se_customers, se_products, se_orders = extract_sales(sales_se_conn)
+    sales_se_conn.close()
+
+    # Northeast shard - extract customers, products, orders
+    ne_customers, ne_products, ne_orders = extract_sales(sales_ne_conn)
+    sales_ne_conn.close()
+
+    # Merge the data
+    customers = se_customers + ne_customers
+    orders = se_orders + ne_orders
+    products = se_products  # As a reference table choosing one shard's products is sufficient
+
+    # HR data
     hr_conn = get_connection("HR")
     employees = extract_hr(hr_conn)
     hr_conn.close()
