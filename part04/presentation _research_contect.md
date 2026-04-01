@@ -1,4 +1,4 @@
-# SLIDE PORTADA
+# SLIDE
 
 **Title:** SingleStore: Distributed SQL for the Real-Time Enterprise  
 **Subtitle:** ISM 6562 — Midterm Part 4 | Alpha Developers  
