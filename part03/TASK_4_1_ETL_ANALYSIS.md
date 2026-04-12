@@ -293,7 +293,6 @@ if __name__ == "__main__":
         print(f"ETL FAILED: {e}", file=sys.stderr)
         sys.exit(1)
 
-Gemini said
 Task 4.1: ETL Script Analysis
 To transition the ETL pipeline to a hybrid architecture, I must first add the import from cassandra.cluster import Cluster. I will then implement a new function, extract_orders_from_cassandra(), to connect to the cluster and retrieve data from the techretail_orders keyspace. Within run_etl(), the extraction logic requires significant modification: the calls to extract_sales_from_shard() must be updated to stop pulling from the relational orders table, and the line merging se_orders and ne_orders will be replaced by the new Cassandra function call. Fortunately, the rest of the pipeline remains unchanged. The extraction of reference data like customers and products from PostgreSQL continues as before. Additionally, the entire transformation and loading phase for the SingleStore warehouse stays identical, ensuring that the final star schema remains consistent even as the source system for orders shifts from relational shards to NoSQL.
 
